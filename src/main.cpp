@@ -5,24 +5,28 @@
 #include <Adafruit_BME280.h>
 #include "FS.h"
 #include "SPIFFS.h"
+#define ENABLE_GxEPD2_GFX 0
+#include <GxEPD2_BW.h>
+#include <qrcode.h>
+#include "credentials.h"
+
+GxEPD2_BW<GxEPD2_213_B73, GxEPD2_213_B73::HEIGHT> display(GxEPD2_213_B73(/*CS=5*/ 5, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4)); // GDEH0213B73
 
 /* You only need to format SPIFFS the first time you run a
    test or else use the SPIFFS plugin to create a partition
    https://github.com/me-no-dev/arduino-esp32fs-plugin */
 #define FORMAT_SPIFFS_IF_FAILED true
+#define RELAY_PIN 27
+#define POTENTIO_PIN 34
 
 #define CREDENTIALS_FILE "/credentials.txt"
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 
-const char* ssid = "MenMs";
-const char* wifiPassword = "Welkom 1n d1t huis";
-char* host = "iotedge.servers";
-char* username = "devicebootstrap";
-char* c8yPassword = "Fhdt1bb1f";
-char* tenant = "management";
+
 char clientId[20];
 bool storedCredentials = false;
+int relayState = HIGH;
 
 WiFiClient wifiClient;
 CumulocityClient c8yClient(wifiClient, clientId);
@@ -37,6 +41,24 @@ void getSerialNumber() {
   snprintf(clientId, 19, "ESP32-%04X%08X", chip, (uint32_t)chipid);
 
   Serial.printf("Serial Number is: %s\n", clientId);
+}
+
+void helloWorld()
+{
+  display.setRotation(1);
+  uint16_t x = (display.width() - 160) / 2;
+  uint16_t y = display.height() / 2;
+  display.firstPage();
+  do
+  {
+    display.fillScreen(GxEPD_WHITE);
+    display.setTextColor(GxEPD_BLACK);
+    display.setCursor(x, y); // start writing at this position
+    display.setTextSize(2);
+    display.print("Hello World!");
+  }
+  while (display.nextPage());
+  //Serial.println("helloWorld done");
 }
 
 //connect to a WiFi access point
@@ -164,6 +186,21 @@ void connectC8Y() {
   }
 }
 
+int switchWindmill(char* templateCode, char* payload) {
+
+  Serial.printf("switchWindmill(template: %s, payload: %s)\n", templateCode, payload);
+
+  if (strcmp("CLOSED", payload)==0) {
+    relayState = HIGH;
+  } else {
+    relayState = LOW;
+  }
+
+  digitalWrite(RELAY_PIN, relayState);
+  
+  return 0;
+}
+
 void sendData() {
 
   Serial.println("SendData()");
@@ -199,11 +236,66 @@ void sendData() {
   Serial.println(" m");
 
   series = "Vibration";
-  sprintf(value, "%d", analogRead(34));
-  uom = "nm/s2";
+  sprintf(value, "%d", analogRead(POTENTIO_PIN));
+  uom = "nm/s";
   c8yClient.createMeasurement(fragment, series, value, uom);
   Serial.print("Send Vibration: ");
   Serial.println(value);
+}
+
+void drawBox(int box_x, int box_y, int box_w, int box_h) {
+  Serial.printf("width: %d, height: %d", display.width(), display.height());
+  display.setRotation(1);
+  display.setPartialWindow(box_x, box_y, box_w, box_h);
+  display.firstPage();
+  do {
+    display.fillRect(box_x, box_y, box_w, box_h, GxEPD_BLACK);
+    display.fillRect(box_x+2, box_y+2, 24, 24, GxEPD_WHITE);
+    display.fillRect(box_x+28,box_y+2, box_w-31, box_h-4, GxEPD_WHITE);
+  } while (display.nextPage());
+}
+
+void printQRCode() {
+  // Create the QR code
+  QRCode qrcode;
+  uint8_t qrcodeData[qrcode_getBufferSize(5)];
+  qrcode_initText(&qrcode, qrcodeData, 5, ECC_MEDIUM, "https://iotedge.servers/apps/cockpit/index.html#/device/621/dashboard/574193");
+
+  byte box_x = 5;
+  byte box_y = 5;
+  byte box_s = 3.5;
+  byte init_x = box_x;
+
+  //display.clearScreen();
+  
+  display.firstPage();
+  do {
+
+    display.fillScreen(GxEPD_WHITE);
+
+    for (uint8_t y = 0; y < qrcode.size; y++) {
+      // Each horizontal module
+      for (uint8_t x = 0; x < qrcode.size; x++) {
+        if(qrcode_getModule(&qrcode, x, y)){
+          display.fillRect(box_x, box_y, box_s, box_s, GxEPD_BLACK);
+        } else {
+        }
+        box_x = box_x + box_s;
+      }
+      box_y = box_y + box_s;
+      box_x = init_x;
+    }
+
+  } while (display.nextPage());
+
+  box_x=130, box_y=16;
+  int box_w=120, box_h=28;
+  drawBox(box_x, box_y, box_w, box_h);
+  box_y +=32;
+  drawBox(box_x, box_y, box_w, box_h);
+  box_y +=32;
+  drawBox(box_x, box_y, box_w, box_h);
+  //display.display();
 }
 
 //============================================================================
@@ -214,15 +306,20 @@ void setup() {
 
   Serial.begin(115200);
 
+  display.init(115200, false, 20, false);
+
+  printQRCode();
+  display.powerOff();
+
   bool status = bme.begin(0x76);
   if (!status) {
     Serial.println("Could not find a valid BME280 sensor, check wiring!");
   }
   
-  pinMode(34, INPUT);
-  pinMode(27, OUTPUT);
+  pinMode(POTENTIO_PIN, INPUT);
+  pinMode(RELAY_PIN, OUTPUT);
 
-  digitalWrite(27, LOW);
+  digitalWrite(RELAY_PIN, HIGH);
 
   connectWifi();
 
@@ -242,7 +339,13 @@ void setup() {
   }
 
   c8yClient.registerDevice(clientId, "c8y_esp32");
-    
+  
+  c8yClient.setCallback(switchWindmill);
+  
+  c8yClient.setSupportedOperations("c8y_Relay,c8y_Command,c8y_Restart");
+
+  c8yClient.getPendingOperations();
+
 }
 
 void loop() {
