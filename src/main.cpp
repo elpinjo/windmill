@@ -341,9 +341,9 @@ void setup() {
   pubChannel = pubChannel + clientId;
   display.init(115200, false, 20, false);
 
-  printQRCode();
+  //printQRCode();
   //helloWorld();
-  display.powerOff();
+  //display.powerOff();
 
   bool status = bme.begin(0x76);
   
@@ -376,17 +376,17 @@ void setup() {
 
 void loop() {
   
-  delay(500);
+  delay(1000);
   bool myConnected = _client.loop();
 
   if (!myConnected) {
     connect(host);
   }
 
-  timer += 500;
-  if (timer >= 10000) {
+ // timer += 500;
+ // if (timer >= 10000) {
     sendData();
-    timer = 0;
-  }
+  //  timer = 0;
+ // }
 
 }
